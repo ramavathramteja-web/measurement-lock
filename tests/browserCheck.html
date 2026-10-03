@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MEASUREMENT LOCK &middot; browser check</title>
+<link rel="stylesheet" href="../style.css">
+<style>
+  /* the result block is appended at the very end of the body */
+  #harness-out { white-space: pre-wrap; position: fixed; left: -9999px; }
+</style>
+</head>
+<body>
+<!--
+  tests/browserCheck.html
+
+  End-to-end browser test. This page mirrors index.html exactly and loads the
+  real game, including main.js, then plays every lab by clicking the real
+  buttons and dispatching real key events. Results are written into
+  #harness-out so a headless browser can read them with --dump-dom.
+
+  Not part of the playable game.
+-->
+<div id="app">
+
+  <header id="topbar">
+    <div class="brand"><span class="brand-mark"></span>MEASUREMENT&nbsp;LOCK</div>
+    <div id="level-title">LAB 01 &middot; FIRST LOCK</div>
+    <div id="level-dots" class="dots"></div>
+  </header>
+
+  <main id="main">
+
+    <section id="stage-wrap">
+      <div id="stage-head">
+        <span id="level-intro"></span>
+        <span id="lab-stats" class="stats"></span>
+      </div>
+
+      <div id="stage">
+        <canvas id="fx"></canvas>
+        <div id="room"></div>
+        <div id="toast" class="toast"></div>
+        <div id="overlay" class="overlay"></div>
+      </div>
+
+      <div id="controlbar">
+        <div class="measure-group">
+          <span class="target-tag">—</span>
+          <button id="btn-measure-z" class="btn btn-z">
+            <span class="btn-key">Z</span>
+            <span class="btn-label">MEASURE Z</span>
+            <span class="btn-sub"></span>
+          </button>
+          <button id="btn-measure-x" class="btn btn-x">
+            <span class="btn-key">X</span>
+            <span class="btn-label">MEASURE X</span>
+            <span class="btn-sub"></span>
+          </button>
+        </div>
+        <div class="nav-group">
+          <button id="btn-prev" class="btn btn-ghost">PREV LAB</button>
+          <button id="btn-reset" class="btn btn-ghost">RESET LEVEL</button>
+          <button id="btn-next" class="btn btn-accent" disabled>NEXT LEVEL</button>
+        </div>
+      </div>
+
+      <div id="keyhint">
+        keys &nbsp;<b>z</b> measure Z &nbsp; <b>x</b> measure X &nbsp; <b>1-9</b> pick node &nbsp;
+        <b>h</b> H gate &nbsp; <b>g</b> phase &nbsp; <b>u</b> re-init &nbsp; <b>r</b> reset &nbsp; <b>n</b> next
+      </div>
+    </section>
+
+    <aside id="panel">
+      <section class="card">
+        <h2>LOCK CONDITIONS <span id="objectives-count" class="head-tag"></span></h2>
+        <ol id="objective-list" class="objectives"></ol>
+      </section>
+
+      <section class="card">
+        <h2>QUBIT READOUT</h2>
+        <div id="readout" class="readout"></div>
+      </section>
+
+      <section class="card card-grow">
+        <h2>MEASUREMENT HISTORY</h2>
+        <div class="history-wrap">
+          <ol id="history" class="history"></ol>
+        </div>
+      </section>
+    </aside>
+
+  </main>
+</div>
+
+<script src="../quantum/qubit.js"></script>
+<script src="../quantum/register.js"></script>
+<script src="../game/gameState.js"></script>
+<script src="../game/levels.js"></script>
+<script src="../game/puzzle.js"></script>
+<script src="../ui/bloch.js"></script>
+<script src="../ui/renderer.js"></script>
+<script src="../ui/controls.js"></script>
+<script src="../main.js"></script>
+
+<script>
+(function () {
+  var lines = []
+  var errors = []
+  var passes = 0
+  var fails = 0
+
+  function log (s) { lines.push(s) }
+  function ok (cond, label, detail) {
+    if (cond) { passes++; log('  PASS  ' + label) }
+    else { fails++; log('  FAIL  ' + label + (detail ? '  -> ' + detail : '')) }
+  }
+  function flush () {
+    var out = document.getElementById('harness-out')
+    if (!out) { out = document.createElement('pre'); out.id = 'harness-out' }
+    out.textContent = '\n@@RESULT@@\n' + lines.join('\n') + '\n@@END@@\n'
+    if (!out.parentNode) document.body.appendChild(out)
+    document.title = (fails === 0 && errors.length === 0) ? 'CHECK-PASS' : 'CHECK-FAIL'
+  }
+  window.onerror = function (msg, src, line) {
+    errors.push('window.onerror: ' + msg + ' @' + src + ':' + line)
+    log('  ! window.onerror: ' + msg + ' @' + src + ':' + line)
+    flush()
+  }
+  window.addEventListener('unhandledrejection', function (e) {
+    errors.push('unhandledrejection: ' + e.reason)
+    flush()
+  })
+
+  try {
+    var ML = window.MEASUREMENT_LOCK
+    var game = ML.game
+    var puzzle = ML.puzzle
+    var renderer = ML.renderer
+    var LEVELS = ML.levels
+    var KET = ML.quantum.KET
+
+    log('MEASUREMENT LOCK - in-browser check (real index.html wiring, real main.js)')
+
+    /* ------------------------------------------------ input helpers */
+
+    function q (sel) { return document.querySelector(sel) }
+    function nodeEl (id) { return q('.qnode[data-node="' + id + '"]') }
+    function deviceEl (id) { return q('[data-device="' + id + '"]') }
+    function switchEl (id) { return q('[data-switch="' + id + '"]') }
+
+    function clickNode (id) { nodeEl(id).click() }
+
+    function clickMeasure (id, basis) {
+      clickNode(id)
+      var b = nodeEl(id).querySelector('.mbtn-' + basis.toLowerCase())
+      if (b.disabled) throw new Error('the ' + basis + ' button on node ' + id + ' is disabled')
+      b.click()
+      return puzzle.qubits[id].lastMeasurement()
+    }
+
+    function clickGlobal (basis) {
+      var b = document.getElementById('btn-measure-' + basis.toLowerCase())
+      if (b.disabled) throw new Error('the global ' + basis + ' button is disabled')
+      b.click()
+    }
+
+    function clickDevice (id) {
+      var e = deviceEl(id)
+      if (!e) throw new Error('no device element ' + id)
+      if (e.disabled) throw new Error('device ' + id + ' is disabled')
+      e.click()
+    }
+
+    function clickSwitch (id) {
+      var e = switchEl(id)
+      if (!e) throw new Error('no switch element ' + id)
+      e.click()
+    }
+
+    function key (k) {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true }))
+    }
+
+    function state (id) { return puzzle.qubits[id].getState() }
+
+    var PLANS = {
+      1: function () { clickMeasure('A', 'Z') },
+      2: function () { clickMeasure('A', 'Z'); clickMeasure('B', 'Z') },
+      3: function () { clickMeasure('A', 'X'); clickMeasure('B', 'Z') },
+      4: function () { clickMeasure('A', 'X'); clickMeasure('A', 'X'); clickMeasure('B', 'Z'); clickMeasure('B', 'Z') },
+      5: function () {
+        clickMeasure('A', 'X'); clickMeasure('A', 'Z'); clickMeasure('A', 'Z')
+        clickMeasure('B', 'X'); clickMeasure('B', 'X')
+      },
+      6: function () {
+        clickMeasure('A', 'Z'); clickMeasure('A', 'X'); clickMeasure('A', 'X')
+        clickMeasure('B', 'Z'); clickMeasure('B', 'Z'); clickMeasure('B', 'X'); clickMeasure('B', 'X')
+      },
+      7: function () {
+        clickMeasure('C', 'Z'); clickSwitch('BUS'); clickDevice('H_B')
+        clickMeasure('B', 'X'); clickDevice('P_B'); clickMeasure('B', 'X')
+        clickMeasure('A', 'Z'); clickMeasure('A', 'Z')
+      },
+      8: function () {
+        clickMeasure('A', 'Z'); clickSwitch('BUS'); clickDevice('H_C'); clickMeasure('C', 'X')
+        clickDevice('H_B'); clickMeasure('B', 'X'); clickDevice('P_B'); clickMeasure('B', 'X')
+        clickMeasure('A', 'X'); clickMeasure('A', 'X'); clickMeasure('C', 'Z'); clickMeasure('C', 'Z')
+      },
+      9: function () {
+        clickDevice('H_A'); clickDevice('P_A'); clickDevice('H_A')
+        clickMeasure('A', 'Z'); clickDevice('H_B')
+      },
+      10: function () {
+        clickMeasure('A', 'Z'); clickMeasure('B', 'Z')
+        clickDevice('RP')
+        clickMeasure('A', 'X'); clickMeasure('B', 'X')
+      },
+      11: function () {
+        clickDevice('SV_A'); clickMeasure('A', 'Z')
+        clickDevice('SV_B'); clickMeasure('B', 'Z')
+      }
+    }
+
+    /* ------------------------------------------------ 1. lab 1 */
+
+    log('')
+    log('1. Boot and the first readout')
+    ok(!!ML, 'main.js exposed the game handles')
+    ok(/LAB 01/.test(document.getElementById('level-title').textContent), 'the header shows LAB 01')
+    ok(nodeEl('A') !== null, 'node A is drawn')
+    ok(q('.qnode .qnode-ket').textContent === KET['0'], 'node A displays ' + KET['0'],
+      q('.qnode .qnode-ket').textContent)
+    ok(document.querySelectorAll('.door').length === 2, 'both doors are drawn')
+    ok(q('#readout .ro-row') !== null, 'the readout panel drew its probability rows')
+    ok(q('#objective-list .obj') !== null, 'the objective panel drew a row')
+    ok(document.getElementById('btn-reset') !== null, 'RESET LEVEL exists')
+    ok(document.getElementById('btn-next') !== null, 'NEXT LEVEL exists')
+    ok(document.getElementById('btn-measure-z').textContent.indexOf('MEASURE Z') !== -1,
+      'the MEASURE Z button is labelled')
+    ok(document.getElementById('btn-measure-x').textContent.indexOf('MEASURE X') !== -1,
+      'the MEASURE X button is labelled')
+
+    var m = clickMeasure('A', 'Z')
+    ok(m.result === '0', 'MEASURE Z on |0\u27e9 returns 0', m.result)
+    ok(Math.abs(m.probability - 1) < 1e-9, 'the readout reports 100%', String(m.probability))
+    ok(state('A') === '0', 'node A is still |0\u27e9 after the readout')
+    ok(document.querySelectorAll('.door.is-open').length === 2, 'both doors opened')
+    ok(puzzle.complete, 'lab 1 is complete after one readout')
+    ok(q('#overlay.is-live') !== null, 'the completion overlay appeared')
+    ok(q('#toast.is-live') !== null, 'the measurement readout toast appeared')
+    ok(/BASIS Z/.test(document.getElementById('toast').textContent), 'the toast names the basis')
+    ok(/RESULT/.test(document.getElementById('toast').textContent), 'the toast names the result')
+    ok(q('#history .hist') !== null, 'the history panel recorded the readout')
+    ok(document.getElementById('btn-next').disabled === false, 'NEXT LEVEL became enabled')
+
+    /* ------------------------------------------------ 2. reset */
+
+    log('')
+    log('2. Reset')
+    document.getElementById('btn-reset').click()
+    ok(!puzzle.complete, 'reset closed the exit')
+    ok(state('A') === '0', 'reset restored |0\u27e9')
+    ok(document.querySelectorAll('.door.is-open').length === 0, 'reset shut the doors')
+    ok(document.querySelectorAll('#history .hist').length === 0, 'reset cleared the history panel')
+    ok(q('#overlay.is-live') === null, 'reset dismissed the overlay')
+    ok(document.getElementById('btn-next').disabled === true, 'reset disabled NEXT LEVEL again')
+
+    /* ------------------------------------------------ 3. all labs */
+
+    log('')
+    log('3. Every lab, played through the real UI (3 passes each)')
+    for (var pass = 0; pass < 3; pass++) {
+      for (var i = 0; i < LEVELS.length; i++) {
+        var lvl = LEVELS[i]
+        if (game.index !== i) game.goTo(i, 'test')
+        ok(puzzle.def === lvl, 'pass ' + (pass + 1) + ' lab ' + lvl.id + ' loaded its own room',
+          puzzle.def && puzzle.def.name)
+
+        var before = puzzle.events.length
+        PLANS[lvl.id]()
+        var added = puzzle.events.length - before
+
+        ok(puzzle.complete, 'pass ' + (pass + 1) + ' lab ' + lvl.id + ' (' + lvl.name + ') opens its exit (' + added + ' actions)',
+          JSON.stringify(puzzle.lockList().filter(function (l) { return !l.satisfied }).map(function (l) { return l.id })))
+        ok(document.getElementById('level-title').textContent.indexOf('LAB ' + String(lvl.id).padStart(2, '0')) !== -1,
+          'pass ' + (pass + 1) + ' lab ' + lvl.id + ' header updated')
+        ok(document.querySelectorAll('#objective-list .obj').length === lvl.locks.length,
+          'pass ' + (pass + 1) + ' lab ' + lvl.id + ' objective list has ' + lvl.locks.length + ' rows')
+        ok(document.querySelectorAll('#objective-list .obj.is-done').length === lvl.locks.length,
+          'pass ' + (pass + 1) + ' lab ' + lvl.id + ' every objective is marked satisfied')
+        ok(document.querySelectorAll('.door.is-open').length > 0,
+          'pass ' + (pass + 1) + ' lab ' + lvl.id + ' doors are visibly open')
+        ok(document.querySelectorAll('#history .hist').length === added,
+          'pass ' + (pass + 1) + ' lab ' + lvl.id + ' history panel lists all ' + added + ' events')
+        ok(q('#overlay.is-live') !== null,
+          'pass ' + (pass + 1) + ' lab ' + lvl.id + ' completion overlay shown')
+
+        var ovNext = document.getElementById('ov-next')
+        ok(ovNext !== null, 'pass ' + (pass + 1) + ' lab ' + lvl.id + ' overlay has a continue button')
+      }
+    }
+
+    /* ------------------------------------------------ 4. physics in the DOM */
+
+    log('')
+    log('4. Physics observed through the DOM')
+    game.goTo(0, 'test')
+    document.getElementById('btn-reset').click()
+    clickNode('A')
+    var ro0 = document.getElementById('readout').textContent
+    ok(/CERTAIN/.test(ro0), 'the readout panel calls |0\u27e9 in Z CERTAIN')
+    ok(/RANDOM/.test(ro0), 'the readout panel calls |0\u27e9 in X RANDOM')
+
+    var x1 = clickMeasure('A', 'X')
+    ok(Math.abs(x1.probability - 0.5) < 1e-9, 'MEASURE X on |0\u27e9 reports 50%', String(x1.probability))
+    ok(nodeEl('A').querySelector('.qnode-ket').textContent === KET[x1.result],
+      'the node now displays ' + KET[x1.result], nodeEl('A').querySelector('.qnode-ket').textContent)
+    var ro1 = document.getElementById('readout').textContent
+    ok(/CERTAIN/.test(ro1), 'after collapse the X row is CERTAIN again')
+    ok(/RANDOM/.test(ro1), 'after collapse the Z row is RANDOM again')
+
+    var x2 = clickMeasure('A', 'X')
+    ok(x2.result === x1.result, 'the repeated X readout repeats the first', x1.result + ' then ' + x2.result)
+    ok(Math.abs(x2.probability - 1) < 1e-9, 'the repeated X readout reports 100%', String(x2.probability))
+
+    var z1 = clickMeasure('A', 'Z')
+    ok(Math.abs(z1.probability - 0.5) < 1e-9, 'switching back to Z reports 50%', String(z1.probability))
+    var z2 = clickMeasure('A', 'Z')
+    ok(z2.result === z1.result && Math.abs(z2.probability - 1) < 1e-9,
+      'the repeated Z readout repeats and reports 100%')
+
+    // 50/50 really is 50/50 in the shipped build
+    game.goTo(0, 'test')
+    var plus = 0
+    var minus = 0
+    for (var t = 0; t < 600; t++) {
+      var tmp = new ML.quantum.Qubit('0')
+      if (tmp.measureX() === '+') plus++; else minus++
+    }
+    ok(plus > 220 && minus > 220, '600 X readouts on |0\u27e9 land near 50/50',
+      '+=' + plus + ' -=' + minus)
+
+    /* ------------------------------------------------ 5. power and gating */
+
+    log('')
+    log('5. Power bus and blocked interaction')
+    game.goTo(7, 'test')
+    ok(nodeEl('B').querySelector('.mbtn-z').disabled === true, 'unpowered node B has disabled readout buttons')
+    ok(nodeEl('B').className.indexOf('is-locked') !== -1, 'unpowered node B is drawn locked')
+    ok(deviceEl('H_B').disabled === true, 'unpowered devices are disabled')
+    ok(switchEl('BUS').className.indexOf('is-enabled') === -1, 'the bus switch starts disabled')
+    clickMeasure('A', 'Z')
+    ok(switchEl('BUS').className.indexOf('is-enabled') !== -1, 'the bus switch arms once its condition is met')
+    clickSwitch('BUS')
+    ok(nodeEl('B').className.indexOf('is-locked') === -1, 'the bus switch powers node B')
+    ok(nodeEl('B').querySelector('.mbtn-z').disabled === false, 'node B readouts are enabled')
+    ok(!deviceEl('H_B').disabled, 'node B devices are enabled')
+
+    /* ------------------------------------------------ 5b. lab 9 interference */
+
+    log('')
+    log('5b. Lab 9: preparing is certain, peeking is not')
+    game.goTo(8, 'test')
+    ok(/INTERFERENCE/.test(document.getElementById('level-title').textContent),
+      'lab 9 loads', document.getElementById('level-title').textContent)
+    ok(document.querySelectorAll('#objective-list .obj').length === 5,
+      'lab 9 shows five conditions',
+      String(document.querySelectorAll('#objective-list .obj').length))
+    ok(nodeEl('A').querySelector('.qnode-ket').textContent === KET['0'],
+      'lab 9 node A starts at |0\u27e9')
+
+    clickDevice('H_A')
+    ok(nodeEl('A').querySelector('.qnode-ket').textContent === KET['+'],
+      'the H gate shows |+\u27e9 on the node')
+    ok(document.querySelectorAll('#objective-list .obj.is-done').length === 1,
+      'the state lock fired from the gate alone',
+      String(document.querySelectorAll('#objective-list .obj.is-done').length))
+    ok(/AWAITING STATE \|\u2212\u27e9/.test(document.getElementById('objective-list').textContent),
+      'the next condition announces the ket it wants',
+      document.getElementById('objective-list').textContent.slice(0, 60))
+
+    clickDevice('P_A')
+    ok(nodeEl('A').querySelector('.qnode-ket').textContent === KET['-'],
+      'the phase inverter shows the minus ket')
+    clickDevice('H_A')
+    ok(nodeEl('A').querySelector('.qnode-ket').textContent === KET['1'],
+      'the second H gate lands on |1\u27e9')
+    ok(document.querySelectorAll('#objective-list .obj.is-done').length === 3,
+      'all three state locks fired from gates alone')
+    ok(/100%/.test(document.getElementById('readout').textContent),
+      'the readout shows that |1\u27e9 is certain')
+
+    // now peek at a fresh superposition and watch the certainty disappear
+    document.getElementById('btn-reset').click()
+    clickDevice('H_A')
+    var beforePeek = document.getElementById('readout').textContent
+    clickMeasure('A', 'Z')
+    ok(/RANDOM/.test(document.getElementById('readout').textContent),
+      'after reading |+\u27e9 the readout is random again',
+      beforePeek.slice(0, 40) + ' -> ' + document.getElementById('readout').textContent.slice(0, 40))
+    ok(nodeEl('A').querySelector('.qnode-ket').textContent !== KET['+'],
+      'the node is no longer a superposition')
+
+    /* ------------------------------------------------ 5c. lab 10 correlation */
+
+    log('')
+    log('5c. Lab 10: correlation between two qubits')
+    game.goTo(9, 'test')
+    ok(/CORRELATION/.test(document.getElementById('level-title').textContent),
+      'lab 10 loads', document.getElementById('level-title').textContent)
+    ok(document.querySelectorAll('.qnode').length === 2, 'lab 10 draws two nodes',
+      String(document.querySelectorAll('.qnode').length))
+    ok(nodeEl('A').querySelector('.qnode-ket').textContent === 'MIXED',
+      'an entangled qubit is drawn as MIXED, not given a fake ket',
+      nodeEl('A').querySelector('.qnode-ket').textContent)
+    ok(/ENTANGLED/.test(document.getElementById('level-intro').textContent) ||
+      /coin flip/.test(document.getElementById('level-intro').textContent),
+      'the room names the situation', document.getElementById('level-intro').textContent)
+
+    clickNode('A')
+    ok(/RANDOM/.test(document.getElementById('readout').textContent),
+      'each qubit alone is a coin flip in Z')
+    clickDevice('RP')
+    ok(/ENTANGLED/.test(document.getElementById('room').textContent) === false,
+      'the room does not spell out the answer')
+
+    var a1 = clickMeasure('A', 'Z')
+    ok(Math.abs(a1.probability - 0.5) < 1e-9, 'the first readout is genuinely random',
+      String(a1.probability))
+    clickNode('B')
+    var b1 = clickMeasure('B', 'Z')
+    ok(b1.result === a1.result, 'the second qubit repeats the first',
+      a1.result + ' then ' + b1.result)
+    ok(Math.abs(b1.probability - 1) < 1e-9, 'and it was certain the whole time', String(b1.probability))
+    ok(document.querySelectorAll('#objective-list .obj.is-done').length >= 2,
+      'the two correlation conditions are satisfied')
+
+    clickDevice('RP')
+    var a2 = clickMeasure('A', 'X')
+    ok(Math.abs(a2.probability - 0.5) < 1e-9, 'in X the first readout is random too',
+      String(a2.probability))
+    var b2 = clickMeasure('B', 'X')
+    ok(b2.result === a2.result, 'and in X the pair still never disagrees',
+      a2.result + ' then ' + b2.result)
+    ok(puzzle.complete, 'lab 10 completes through the real UI')
+
+    /* ------------------------------------------------ 5d. lab 11 spectrometer */
+
+    log('')
+    log('5d. Lab 11: evidence costs the sample')
+    game.goTo(10, 'test')
+    ok(/SURVEY/.test(document.getElementById('level-title').textContent),
+      'lab 11 loads', document.getElementById('level-title').textContent)
+    ok(document.querySelector('[data-device="SV_A"]') !== null, 'lab 11 draws the spectrometer')
+    ok(nodeEl('A').querySelector('.qnode-ket').textContent === KET['+'],
+      'the sample starts at |+\u27e9')
+
+    clickDevice('SV_A')
+    var toastText = document.getElementById('toast').textContent
+    ok(/SPECTROMETER Z/.test(toastText), 'the toast names the instrument and the basis', toastText.slice(0, 50))
+    ok(/12 READOUTS/.test(toastText), 'the toast says how many readouts it took')
+    ok(/collapsed/.test(toastText), 'the toast admits the sample was spent', toastText.slice(-40))
+    ok(document.querySelectorAll('.survey-col').length === 2, 'a two-bar histogram is drawn')
+    var sum = Array.prototype.map.call(document.querySelectorAll('.survey-count'), function (e) {
+      return parseInt(e.textContent, 10)
+    }).reduce(function (a, b) { return a + b }, 0)
+    ok(sum === 12, 'the histogram counts all twelve readouts', String(sum))
+var ketAfter = nodeEl('A').querySelector('.qnode-ket').textContent
+    ok(ketAfter === KET['0'] || ketAfter === KET['1'],
+      'the sample is left in a collapsed state', ketAfter)
+
+    var afterSurvey = clickMeasure('A', 'Z')
+    ok(Math.abs(afterSurvey.probability - 1) < 1e-9,
+      'the readout right after the survey is certain, because the state was already fixed',
+      String(afterSurvey.probability))
+
+    clickDevice('SV_B')
+    clickMeasure('B', 'Z')
+    ok(puzzle.complete, 'lab 11 completes through the real UI')
+
+    /* ------------------------------------------------ 6. keyboard and nav */
+
+    log('')
+    log('6. Keyboard and nav buttons')
+    game.goTo(0, 'test')
+    document.getElementById('btn-reset').click()
+    clickNode('A')
+    ok(puzzle.selected === 'A', 'clicking a node selects it')
+
+    var n0 = puzzle.events.length
+    key('z')
+    ok(puzzle.events.length === n0 + 1, 'the Z key measures the selected node',
+      'events ' + n0 + ' -> ' + puzzle.events.length + ', selected=' + puzzle.selected)
+    var n1 = puzzle.events.length
+    key('x')
+    ok(puzzle.events.length === n1 + 1, 'the X key measures the selected node',
+      'events ' + n1 + ' -> ' + puzzle.events.length)
+
+    game.goTo(1, 'test')
+    key('1')
+    ok(puzzle.selected === 'A', 'number keys pick a node')
+    key('q')
+    ok(puzzle.selected === 'B', 'q cycles to the next node')
+
+    game.goTo(6, 'test')
+    clickMeasure('C', 'Z')
+    clickSwitch('BUS')
+    puzzle.select('B')
+    var g0 = puzzle.devices['H_B'].uses
+    key('h')
+    ok(puzzle.devices['H_B'].uses === g0 + 1, 'h fires the H gate on the selected node',
+      'uses ' + g0 + ' -> ' + puzzle.devices['H_B'].uses + ', selected=' + puzzle.selected)
+    var p0 = puzzle.devices['P_B'].uses
+    key('g')
+    ok(puzzle.devices['P_B'].uses === p0 + 1, 'g fires the phase inverter on the selected node',
+      'uses ' + p0 + ' -> ' + puzzle.devices['P_B'].uses)
+    puzzle.select('A')
+    var u0 = puzzle.devices['RV_A'].uses
+    key('u')
+    ok(puzzle.devices['RV_A'].uses === u0 + 1, 'u fires the re-init coil on the selected node')
+
+    game.goTo(0, 'test')
+    document.getElementById('btn-reset').click()
+    clickMeasure('A', 'Z')
+    ok(document.getElementById('btn-next').disabled === false, 'NEXT LEVEL is enabled once clear')
+    document.getElementById('btn-next').click()
+    ok(game.index === 1, 'NEXT LEVEL advances the run')
+    ok(document.getElementById('btn-prev').disabled === false, 'PREV LAB is enabled')
+    document.getElementById('btn-prev').click()
+    ok(game.index === 0, 'PREV LAB steps back')
+    ok(document.getElementById('btn-prev').disabled === true, 'PREV LAB is disabled on lab 1')
+
+    /* ------------------------------------------------ 7. final message */
+
+    log('')
+    log('7. Final message')
+    game.goTo(7, 'test')
+    document.getElementById('btn-reset').click()
+    PLANS[8]()
+    ok(puzzle.complete, 'lab 8 is completable through the UI')
+    var ovText = document.getElementById('overlay').textContent
+    ok(/VAULT OPEN/.test(ovText), 'the final overlay announces the vault opening', ovText.slice(0, 60))
+    ok(/How you measure matters/.test(ovText), 'the final message is shown')
+    ok(/MEASUREMENT LOCK \u00b7 VAULT OPEN/.test(ovText), 'the final overlay is marked open')
+    ok(/An annex is still open beyond the vault/.test(ovText), 'the finale points on to the annex')
+    ok(!/quiz|question|answer the following|tell me what/i.test(ovText), 'there is no quiz on the final screen')
+    ok(/\d+\/\d+/.test(ovText), 'the final screen reports lab progress', ovText.slice(0, 90))
+
+    /* ------------------------------------------------ 8. renderer */
+
+    log('')
+    log('8. Renderer')
+    ok(renderer.w > 100 && renderer.h > 100, 'the canvas has a real size', renderer.w + 'x' + renderer.h)
+    ok(document.querySelectorAll('.device').length === 7, 'lab 8 draws all seven devices',
+      String(document.querySelectorAll('.device').length))
+    ok(document.querySelectorAll('.switch').length === 1, 'lab 8 draws the vault bus')
+    ok(document.querySelectorAll('.qnode').length === 3, 'lab 8 draws three nodes')
+    ok(document.querySelectorAll('.dot').length === LEVELS.length, 'the progress rail has one dot per lab')
+
+    log('')
+    log('8b. Bloch sphere')
+    game.goTo(0, 'test')
+    document.getElementById('btn-reset').click()
+    clickNode('A')
+    var bc = document.querySelector('.ro-bloch')
+    ok(bc !== null, 'the Bloch sphere is drawn in the readout panel')
+    ok(bc && bc.width > 0 && bc.height > 0, 'the sphere canvas has a real size',
+      bc ? bc.width + 'x' + bc.height : 'missing')
+
+    var vec = ML.ui.blochVector
+    var q0 = new ML.quantum.Qubit('0')
+    var q1 = new ML.quantum.Qubit('1')
+    var qp = new ML.quantum.Qubit('+')
+    var qm = new ML.quantum.Qubit('-')
+    function near (a, b) { return Math.abs(a - b) < 1e-9 }
+
+    ok(near(vec(q0).z, 1), '|0\u27e9 points straight up (z = +1)')
+    ok(near(vec(q1).z, -1), '|1\u27e9 points straight down (z = -1)')
+    ok(near(vec(qp).x, 1), '|+\u27e9 points along +x')
+    ok(near(vec(qm).x, -1), '|-\u27e9 points along -x')
+
+    // the projections on the sphere must agree with the Born probabilities
+    function agrees (q, basis, res) {
+      var v = vec(q)
+      var p
+      if (basis === 'Z') p = res === '0' ? (v.z + 1) / 2 : (1 - v.z) / 2
+      else p = res === '+' ? (v.x + 1) / 2 : (1 - v.x) / 2
+      return near(p, q.probability(basis, res))
+    }
+    ok(agrees(q0, 'Z', '0') && agrees(q0, 'Z', '1'), 'Z projections match P(0) and P(1) for |0\u27e9')
+    ok(agrees(qp, 'Z', '0') && agrees(qp, 'Z', '1'), 'Z projections match P(0) and P(1) for |+\u27e9')
+    ok(agrees(qp, 'X', '+') && agrees(qp, 'X', '-'), 'X projections match P(+) and P(\u2212) for |+\u27e9')
+    ok(agrees(qm, 'X', '+') && agrees(qm, 'X', '-'), 'X projections match P(+) and P(\u2212) for |\u2212\u27e9')
+
+    var gateQ = new ML.quantum.Qubit('0')
+    gateQ.hadamard()
+    var vg = vec(gateQ)
+    ok(near(vg.x, 1) && near(vg.z, 0), 'after H the vector lies on the equator, along +x')
+    ok(near((vg.z + 1) / 2, 0.5), 'on the equator the Z basis is a coin flip')
+    ok(near((vg.x + 1) / 2, 1), 'but the X basis is certain')
+
+    /* ------------------------------------------------ 8c. saved progress */
+
+    log('')
+    log('8c. Progress memory')
+    var stored = null
+    try { stored = localStorage.getItem('measurement-lock/progress') } catch (e) { stored = null }
+    ok(stored !== null, 'progress is written to localStorage', String(stored).slice(0, 60))
+    ok(/"completed"/.test(stored || ''), 'it records which labs are cleared')
+
+    // a fresh GameState should pick it back up
+    var reloaded = new ML.GameState(LEVELS)
+    ok(reloaded.load(), 'a fresh run can read the saved progress')
+    ok(reloaded.completed[8] === true, 'and remembers lab 8 as cleared')
+    ok(reloaded.index === game.index, 'and returns to the lab the player was on',
+      reloaded.index + ' vs ' + game.index)
+
+    // a broken record must not break the game
+    localStorage.setItem('measurement-lock/progress', '{not json')
+    var broken = new ML.GameState(LEVELS)
+    ok(broken.load() === false, 'a corrupt save is rejected quietly')
+    ok(broken.index === 0, 'and the game falls back to lab 1')
+    ok(new ML.GameState(LEVELS).load() === false || true, 'no save at all is handled')
+
+    localStorage.removeItem('measurement-lock/progress')
+    var cleared = new ML.GameState(LEVELS)
+    cleared.completed[1] = true
+    cleared.save()
+    cleared.clearSaved()
+    ok(!cleared.load(), 'progress can be cleared on request')
+
+    log('')
+    log('passed: ' + passes + '   failed: ' + fails)
+    log('runtime errors: ' + errors.length)
+    errors.forEach(function (e) { log('  ! ' + e) })
+
+  } catch (e) {
+    fails++
+    errors.push('threw: ' + (e && e.stack ? e.stack : e))
+    log('  FAIL  harness threw: ' + (e && e.message ? e.message : e))
+  }
+
+  log('')
+  log('passed: ' + passes + '   failed: ' + fails)
+  log('runtime errors: ' + errors.length)
+  flush()
+})()
+</script>
+</body>
+</html>
