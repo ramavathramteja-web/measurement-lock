@@ -35,6 +35,64 @@ Append `#lab=9` to the URL to jump straight into a lab.
 Keys: `z` `x` measure, `1`–`9` pick a node, `h` H gate, `g` phase, `u` re-init,
 `r` reset level, `n` next lab.
 
+## Demo Mode
+
+For recording a 60–90 second presentation.
+
+Press **DEMO MODE** on the title screen, the DEMO MODE button in the top bar, or
+open `index.html#demo` to launch straight into it. It plays itself in about
+**70 seconds** and stops on its own.
+
+Nothing in it is faked. Every readout comes from the same `Qubit` and `Puzzle`
+objects the real game plays, and the demo clicks the same buttons you would.
+Scene 4 depends on the second X readout repeating the first — that is the
+engine's collapse guarantee, not a scripted line. Press **ESC** or `SKIP` to
+leave; your lab and progress are put back exactly as they were.
+
+Seven scenes: intro, deterministic measurement, probability, collapse, basis
+switching, a real playthrough of Lab 4, and the outro.
+
+### Narration script
+
+Timings are approximate; the demo holds each beat long enough to read.
+
+> [0:00] Most games teach you by telling you the rules.
+> Measurement Lock makes you discover them.
+>
+> [0:08] Here, the way you measure a qubit changes what happens next.
+>
+> [0:16] In the Z basis, this state gives a predictable result. Zero, every time.
+> The door opens.
+>
+> [0:25] Measure the same qubit in the X basis, and certainty is gone.
+> Fifty fifty. That outcome is not something you chose.
+>
+> [0:34] Measure it again in the same basis. Same answer, one hundred percent —
+> because the first measurement collapsed the state.
+>
+> [0:44] Change the basis and the possible outcomes change again.
+> Certainty before. A coin flip after.
+>
+> [0:54] That is the game. Real rooms, real qubits, doors that only open if you
+> measure them the way physics allows.
+>
+> [1:04] Learn quantum measurement by actually using it.
+
+146 words.
+
+## Deploying
+
+The project is plain static files: no build step, no bundler, no server-side
+code, no dependencies. Any static host works, including Vercel:
+
+```
+vercel deploy --prod
+```
+
+`vercel.json` sets conservative cache headers so a redeploy is picked up
+immediately instead of serving a stale engine. `tests/` is not needed by the
+game and can be left out of the deployment.
+
 ## The labs
 
 Labs 1–8 are the required set. Labs 9–11 are an annex that only adds mechanics;

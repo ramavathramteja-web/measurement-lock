@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MEASUREMENT LOCK &middot; demo mode check</title>
+<link rel="stylesheet" href="../style.css">
+<style>#harness-out{position:fixed;left:-9999px}</style>
+</head>
+<body>
+<!--
+  tests/demoCheck.html
+
+  Launches the real Demo Mode and observes it. Every measurement the demo
+  performs is recorded by wrapping the real renderer's showMeasurement, so the
+  assertions below are about what the demo actually did to the engine - not
+  about a script we hoped it followed.
+-->
+<div id="app">
+  <header id="topbar">
+    <div class="brand"><span class="brand-mark"></span>MEASUREMENT&nbsp;LOCK</div>
+    <div id="level-title">LAB 01 &middot; FIRST LOCK</div>
+    <div id="level-dots" class="dots"></div>
+    <button id="btn-demo" class="btn btn-demo btn-sm">DEMO MODE</button>
+  </header>
+  <main id="main">
+    <section id="stage-wrap">
+      <div id="stage-head"><span id="level-intro"></span><span id="lab-stats" class="stats"></span></div>
+      <div id="stage">
+        <canvas id="fx"></canvas>
+        <div id="room"></div>
+        <div id="toast" class="toast"></div>
+        <div id="overlay" class="overlay"></div>
+      </div>
+      <div id="controlbar">
+        <div class="measure-group">
+          <span class="target-tag">—</span>
+          <button id="btn-measure-z" class="btn btn-z"><span class="btn-key">Z</span><span class="btn-label">MEASURE Z</span><span class="btn-sub"></span></button>
+          <button id="btn-measure-x" class="btn btn-x"><span class="btn-key">X</span><span class="btn-label">MEASURE X</span><span class="btn-sub"></span></button>
+        </div>
+        <div class="nav-group">
+          <button id="btn-prev" class="btn btn-ghost">PREV LAB</button>
+          <button id="btn-reset" class="btn btn-ghost">RESET LEVEL</button>
+          <button id="btn-next" class="btn btn-accent" disabled>NEXT LEVEL</button>
+        </div>
+      </div>
+      <div id="keyhint">keys</div>
+    </section>
+    <aside id="panel">
+      <section class="card"><h2>LOCK CONDITIONS <span id="objectives-count" class="head-tag"></span></h2><ol id="objective-list" class="objectives"></ol></section>
+      <section class="card"><h2>QUBIT READOUT</h2><div id="readout" class="readout"></div></section>
+      <section class="card card-grow"><h2>MEASUREMENT HISTORY</h2><div class="history-wrap"><ol id="history" class="history"></ol></div></section>
+    </aside>
+  </main>
+</div>
+
+<div id="title-screen" class="title-screen">
+  <div class="title-inner">
+    <div class="title-mark"></div>
+    <h1>MEASUREMENT LOCK</h1>
+    <p class="title-sub">How you measure changes what happens next.</p>
+    <div class="title-actions">
+      <button id="title-play" class="btn btn-accent btn-lg">PLAY THE GAME</button>
+      <button id="title-demo" class="btn btn-demo btn-lg">DEMO MODE</button>
+    </div>
+  </div>
+</div>
+
+<div id="demo" class="demo">
+  <div id="demo-caption" class="demo-caption">
+    <span id="demo-scene" class="demo-scene"></span>
+    <span id="demo-line" class="demo-line"></span>
+  </div>
+  <div class="demo-rail">
+    <span class="demo-rail-tag">DEMO MODE</span>
+    <div id="demo-bar" class="demo-bar"></div>
+    <span id="demo-clock" class="demo-clock">0:00 / 1:10</span>
+  </div>
+  <div id="demo-card" class="demo-card"></div>
+</div>
+
+<script src="../quantum/qubit.js"></script>
+<script src="../quantum/register.js"></script>
+<script src="../game/gameState.js"></script>
+<script src="../game/levels.js"></script>
+<script src="../game/puzzle.js"></script>
+<script src="../ui/bloch.js"></script>
+<script src="../ui/renderer.js"></script>
+<script src="../ui/controls.js"></script>
+<script src="../ui/demo.js"></script>
+<script src="../main.js"></script>
+
+<script>
+(function () {
+  var lines = []
+  var errors = []
+  var passes = 0
+  var fails = 0
+
+  function log (s) { lines.push(s) }
+  function ok (cond, label, detail) {
+    if (cond) { passes++; log('  PASS  ' + label) }
+    else { fails++; log('  FAIL  ' + label + (detail ? '  -> ' + detail : '')) }
+  }
+  function flush () {
+    var out = document.getElementById('harness-out')
+    if (!out) { out = document.createElement('pre'); out.id = 'harness-out' }
+    out.textContent = '\n@@RESULT@@\n' + lines.join('\n') + '\n@@END@@\n'
+    if (!out.parentNode) document.body.appendChild(out)
+    document.title = (fails === 0 && errors.length === 0) ? 'DEMO-PASS' : 'DEMO-FAIL'
+  }
+  window.onerror = function (m, s, l) {
+    errors.push('window.onerror: ' + m + ' @' + s + ':' + l)
+    log('  ! window.onerror: ' + m)
+    flush()
+  }
+
+  try {
+    var ML = window.MEASUREMENT_LOCK
+    var renderer = ML.renderer
+    var demo = ML.demo
+    var game = ML.game
+    var puzzle = ML.puzzle
+
+    log('MEASUREMENT LOCK - Demo Mode check')
+    log('')
+
+    /* ---------- observe what the demo really does ---------- */
+
+    var measured = []   // every readout the demo triggers, in order
+    var scenes = []     // every caption the demo shows, in order
+    var titles = []     // every title card, in order
+    var levels = []     // every lab the demo loads
+
+    var realShowMeasurement = renderer.showMeasurement.bind(renderer)
+    renderer.showMeasurement = function (info) {
+      measured.push({
+        node: info.nodeId, basis: info.basis, result: info.result,
+        p: info.probability, certain: info.certain, ket: info.ket
+      })
+      return realShowMeasurement(info)
+    }
+
+    var realCaption = demo._caption.bind(demo)
+    demo._caption = function (scene, line) { scenes.push(scene + ' :: ' + line); return realCaption(scene, line) }
+
+    var realTitle = demo._title.bind(demo)
+    demo._title = function (html) {
+      titles.push(String(html).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim())
+      return realTitle(html)
+    }
+
+    var realGoto = demo._goto.bind(demo)
+    demo._goto = function (id) { levels.push(id); return realGoto(id) }
+
+    /* ---------- the menu exists and works ---------- */
+
+    log('1. Launch')
+    ok(document.getElementById('title-screen').className.indexOf('is-live') !== -1,
+      'the main menu is showing at boot')
+    ok(!!document.getElementById('title-demo'), 'a DEMO MODE button exists on the menu')
+    ok(!!document.getElementById('btn-demo'), 'a DEMO MODE button exists in the top bar')
+
+    var before = { index: game.index, completed: JSON.stringify(game.completed) }
+    document.getElementById('title-demo').click()
+    ok(demo.running, 'DEMO MODE launches from the menu')
+    ok(document.body.className.indexOf('demo-mode') !== -1, 'the demo mode body class is set')
+    ok(document.getElementById('title-screen').className.indexOf('is-live') === -1,
+      'the menu gets out of the way')
+    ok(document.getElementById('demo-skip') === null ||
+       document.getElementById('demo').className.indexOf('is-live') !== -1,
+      'the demo stage chrome is visible')
+
+    // wait for the whole scripted run to finish
+    var waited = 0
+    function waitForEnd () {
+      waited++
+      if (demo.running && waited < 4000) { setTimeout(waitForEnd, 30); return }
+      report()
+    }
+    setTimeout(waitForEnd, 60)
+
+    function report () {
+      log('')
+      log('2. Scenes, as the demo played them')
+      var wanted = ['MEASUREMENT LOCK', 'DETERMINISTIC MEASUREMENT', 'PROBABILITY', 'COLLAPSE',
+        'BASIS SWITCHING', 'GAMEPLAY', 'MEASUREMENT LOCK']
+      var seenScene = scenes.map(function (s) { return s.split(' :: ')[0] })
+      wanted.forEach(function (name, w) {
+        // scene 1 and scene 7 share the product name, so count them separately
+        var hits = seenScene.filter(function (n) {
+          return w === 6 ? n === 'MEASUREMENT LOCK' : n.indexOf(name) === 0
+        }).length
+        if (w === 0) {
+          ok(seenScene.some(function (n) { return n.indexOf(name) === 0 }), 'intro shown: ' + name)
+        } else if (w === 6) {
+          ok(hits >= 2, 'outro shown: ' + name + ' (title card appears again)')
+        } else {
+          ok(hits >= 1, 'scene shown: ' + name, JSON.stringify(seenScene))
+        }
+      })
+      ok(levels.length >= 5, 'the demo loaded real labs', JSON.stringify(levels))
+      ok(measured.length >= 9, 'the demo performed real readouts', measured.length + ' readouts')
+
+      log('')
+      log('3. Real quantum behaviour (observed, not scripted)')
+      log('         readouts: ' + measured.map(function (m) {
+        return m.node + ':' + m.basis + '>' + m.result + '@' + Math.round(m.p * 100) + '%'
+      }).join('  '))
+
+      var z = measured[0]
+      ok(z && z.basis === 'Z' && z.result === '0', 'scene 2 reads |0> in Z and gets 0',
+        JSON.stringify(z))
+      ok(z && Math.abs(z.p - 1) < 1e-9, 'and that readout was certain')
+
+      var x1 = measured[1]
+      ok(x1 && x1.basis === 'X', 'scene 3 reads the same node in X', JSON.stringify(x1))
+      ok(x1 && (x1.result === '+' || x1.result === '-'), 'scene 3 got a real +/- outcome', x1 && x1.result)
+      ok(x1 && Math.abs(x1.p - 0.5) < 1e-9, 'scene 3 was a genuine 50/50', x1 && String(x1.p))
+
+      var x2 = measured[2]
+      var x3 = measured[3]
+      ok(x2 && x2.basis === 'X' && x3 && x3.basis === 'X', 'scene 4 reads X twice')
+      ok(x2 && x3 && x2.result === x3.result,
+        'scene 4 collapse: the second X readout repeats the first', x2 && x2.result + ' then ' + x3 && x3.result)
+      ok(x3 && Math.abs(x3.p - 1) < 1e-9, 'and it was reported as certain')
+
+      var zs = measured[4]
+      ok(zs && zs.basis === 'Z', 'scene 5 switches basis to Z', JSON.stringify(zs))
+      ok(zs && (zs.result === '0' || zs.result === '1'), 'scene 5 got a real 0 or 1', zs && zs.result)
+      ok(zs && Math.abs(zs.p - 0.5) < 1e-9, 'and the switch gave a genuine 50/50', zs && String(zs.p))
+
+      log('')
+      log('4. Scene 6 is real gameplay')
+      var gameLab = levels.indexOf(4)
+      ok(gameLab !== -1, 'the demo loads lab 4 for the gameplay scene', JSON.stringify(levels))
+      ok(scenes.some(function (s) { return s.indexOf('GAMEPLAY') === 0 }), 'the gameplay scene is captioned')
+      ok(titles.some(function (t) { return /Learn by playing/.test(t) }), 'the outro shows "Learn by playing."')
+      ok(titles.some(function (t) { return /isn.t just looking/.test(t) }),
+        'the outro shows the closing line')
+      ok(titles.some(function (t) { return /PLAY GAME/.test(t) }), 'the outro has a PLAY GAME call to action')
+      ok(!/quiz/i.test(titles.join(' ')), 'there is no quiz anywhere in the demo')
+
+      log('')
+      log('5. Clean exit')
+      ok(!demo.running, 'the demo finished on its own')
+      ok(document.body.className.indexOf('demo-mode') === -1, 'demo mode class cleared')
+      ok(game.index === before.index, 'the player is put back on the lab they were on',
+        game.index + ' vs ' + before.index)
+      ok(JSON.stringify(game.completed) === before.completed, 'completed labs are untouched')
+
+      log('')
+      log('passed: ' + passes + '   failed: ' + fails)
+      log('runtime errors: ' + errors.length)
+      errors.forEach(function (e) { log('  ! ' + e) })
+      flush()
+    }
+  } catch (e) {
+    fails++
+    errors.push('threw: ' + (e && e.stack ? e.stack : e))
+    log('  FAIL  harness threw: ' + (e && e.message ? e.message : e))
+    flush()
+  }
+
+  log('')
+  log('passed: ' + passes + '   failed: ' + fails)
+  flush()
+})()
+</script>
+</body>
+</html>

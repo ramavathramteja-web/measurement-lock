@@ -26,6 +26,7 @@
     <div class="brand"><span class="brand-mark"></span>MEASUREMENT&nbsp;LOCK</div>
     <div id="level-title">LAB 01 &middot; FIRST LOCK</div>
     <div id="level-dots" class="dots"></div>
+    <button id="btn-demo" class="btn btn-demo btn-sm">DEMO MODE</button>
   </header>
 
   <main id="main">
@@ -92,6 +93,31 @@
   </main>
 </div>
 
+<div id="title-screen" class="title-screen">
+  <div class="title-inner">
+    <div class="title-mark"></div>
+    <h1>MEASUREMENT LOCK</h1>
+    <p class="title-sub">How you measure changes what happens next.</p>
+    <div class="title-actions">
+      <button id="title-play" class="btn btn-accent btn-lg">PLAY THE GAME</button>
+      <button id="title-demo" class="btn btn-demo btn-lg">DEMO MODE</button>
+    </div>
+  </div>
+</div>
+
+<div id="demo" class="demo">
+  <div id="demo-caption" class="demo-caption">
+    <span id="demo-scene" class="demo-scene"></span>
+    <span id="demo-line" class="demo-line"></span>
+  </div>
+  <div class="demo-rail">
+    <span class="demo-rail-tag">DEMO MODE</span>
+    <div id="demo-bar" class="demo-bar"></div>
+    <span id="demo-clock" class="demo-clock">0:00 / 1:10</span>
+  </div>
+  <div id="demo-card" class="demo-card"></div>
+</div>
+
 <script src="../quantum/qubit.js"></script>
 <script src="../quantum/register.js"></script>
 <script src="../game/gameState.js"></script>
@@ -100,6 +126,7 @@
 <script src="../ui/bloch.js"></script>
 <script src="../ui/renderer.js"></script>
 <script src="../ui/controls.js"></script>
+<script src="../ui/demo.js"></script>
 <script src="../main.js"></script>
 
 <script>
@@ -140,6 +167,38 @@
     var KET = ML.quantum.KET
 
     log('MEASUREMENT LOCK - in-browser check (real index.html wiring, real main.js)')
+
+    /* ------------------------------------------------ 0. main menu */
+
+    log('')
+    log('0. Main menu')
+    ok(document.getElementById('title-screen').className.indexOf('is-live') !== -1,
+      'the main menu is up at boot')
+    ok(document.body.className.indexOf('menu-open') !== -1, 'and the menu blocks stray key presses')
+    ok(/MEASUREMENT LOCK/.test(document.querySelector('.title-inner').textContent),
+      'the menu names the game')
+    ok(/PLAY THE GAME/.test(document.getElementById('title-play').textContent),
+      'the menu offers PLAY THE GAME')
+    ok(/DEMO MODE/.test(document.getElementById('title-demo').textContent),
+      'the menu offers DEMO MODE')
+    ok(document.getElementById('btn-demo') !== null, 'the top bar also has a DEMO MODE button')
+
+    var menuIndex = game.index
+    document.getElementById('title-play').click()
+    ok(document.getElementById('title-screen').className.indexOf('is-live') === -1,
+      'PLAY THE GAME closes the menu')
+    ok(document.body.className.indexOf('menu-open') === -1, 'and unblocks the keyboard')
+    ok(game.index === menuIndex, 'closing the menu does not move the player')
+
+    // and the menu can be reopened from the top bar
+    document.getElementById('btn-demo').click()
+    ok(ML.demo !== null && ML.demo !== undefined, 'DEMO MODE is wired up')
+    ok(ML.demo.running, 'the top bar button starts the demo')
+    ok(document.body.className.indexOf('demo-mode') !== -1, 'demo mode body class is set')
+    ML.demo.stop()
+    ok(!ML.demo.running, 'the demo can be stopped')
+    ok(document.body.className.indexOf('demo-mode') === -1, 'and demo mode class clears')
+    ok(game.index === menuIndex, 'stopping the demo puts the player back where they were')
 
     /* ------------------------------------------------ input helpers */
 

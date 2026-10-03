@@ -34,6 +34,8 @@
     this.renderer = opts.renderer
     this.room = opts.room
     this.stage = opts.stage
+    // optional predicate: while it returns true, keyboard input is ignored
+    this.isBlocked = opts.isBlocked || null
 
     var dom = this.renderer.dom
 
@@ -77,6 +79,12 @@
       if (ev.metaKey || ev.ctrlKey || ev.altKey) return
       var k = ev.key.toLowerCase()
       var puzzle = self.puzzle
+
+      // while the main menu is up, only Escape/Enter mean anything
+      if (self.isBlocked && self.isBlocked()) {
+        if (k === 'enter' && ev.target && ev.target.id === 'title-play') ev.target.click()
+        return
+      }
 
       if (k === 'z') { puzzle.measure(puzzle.selected, 'Z'); ev.preventDefault() }
       else if (k === 'x') { puzzle.measure(puzzle.selected, 'X'); ev.preventDefault() }

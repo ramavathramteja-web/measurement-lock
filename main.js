@@ -21,6 +21,9 @@
     gameState: game,
     room: document.getElementById('room'),
     stage: document.getElementById('stage'),
+    isBlocked: function () {
+      return document.body.classList.contains('menu-open') || document.body.classList.contains('demo-mode')
+    },
     onReset: function () { doReset() },
     onNext: function () { doNext() },
     onPrevious: function () { doPrevious() }
@@ -255,12 +258,88 @@
   game.on('level:enter', function () { game.save() })
   game.on('progress:reset', function () { game.clearSaved() })
 
+  /* ------------------------------------------------------------------ *
+   * Main menu and Demo Mode
+   *
+   * Everything here is optional: a page that embeds the game without the
+   * menu markup still boots normally.
+   * ------------------------------------------------------------------ */
+
+  var titleScreen = document.getElementById('title-screen')
+  var btnTitlePlay = document.getElementById('title-play')
+  var btnTitleDemo = document.getElementById('title-demo')
+  var btnDemo = document.getElementById('btn-demo')
+  var demo = null
+
+  // These live at function scope on purpose: block-scoped declarations would
+  // be invisible to the #demo autostart and the Escape handler below.
+  function openMenu () {
+    if (!titleScreen) return
+    titleScreen.classList.add('is-live')
+    document.body.classList.add('menu-open')
+  }
+
+  function closeMenu () {
+    if (!titleScreen) return
+    titleScreen.classList.remove('is-live')
+    document.body.classList.remove('menu-open')
+  }
+
+  function startDemo () {
+    if (!demo) return
+    closeMenu()
+    demo.start()
+  }
+
+  if (ML.ui.Demo && titleScreen && btnTitlePlay && btnTitleDemo) {
+    demo = new ML.ui.Demo({
+      game: game,
+      puzzle: puzzle,
+      renderer: renderer,
+      controls: controls,
+      onExit: function () {
+        renderer.render(puzzle.getSnapshot())
+        renderer.setStats(game.stats, objectives())
+      }
+    })
+
+    btnTitlePlay.addEventListener('click', closeMenu)
+    btnTitleDemo.addEventListener('click', startDemo)
+    if (btnDemo) btnDemo.addEventListener('click', startDemo)
+
+    // clicking anywhere in the room means "I want to play", so get out of the way
+    document.getElementById('main').addEventListener('click', function () {
+      if (titleScreen.classList.contains('is-live')) closeMenu()
+    })
+
+    openMenu()
+
+    // #demo starts Demo Mode straight away, which is handy for recording
+    if (/demo/.test(window.location.hash || '')) startDemo()
+  }
+
+  window.addEventListener('keydown', function (ev) {
+    if (ev.key !== 'Escape') return
+    if (demo && demo.running) { demo.stop(); return }
+    if (titleScreen && titleScreen.classList.contains('is-live')) {
+      titleScreen.classList.remove('is-live')
+      document.body.classList.remove('menu-open')
+    }
+  })
+
+  // #demo starts Demo Mode straight away, which is handy for recording
+  if (/demo/.test(window.location.hash || '') && demo) {
+    closeMenu()
+    demo.start()
+  }
+
   // expose for debugging / automated checks
   window.MEASUREMENT_LOCK = {
     game: game,
     puzzle: puzzle,
     renderer: renderer,
     controls: controls,
+    demo: demo,
     levels: LEVELS,
     quantum: ML.quantum,
     ui: ML.ui,
